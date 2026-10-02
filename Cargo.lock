@@ -26,12 +26,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "anyhow"
-version = "1.0.104"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
-
-[[package]]
 name = "base64"
 version = "0.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -492,7 +486,6 @@ name = "qwen38_27b_in_rust"
 version = "0.1.0"
 dependencies = [
  "ahash",
- "anyhow",
  "memmap2",
  "tokenizers",
 ]

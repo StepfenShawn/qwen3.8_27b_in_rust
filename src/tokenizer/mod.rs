@@ -1,29 +1,45 @@
-use anyhow::{anyhow, Context, Result};
 use ahash::AHashMap;
+use std::fmt::{self};
 use tokenizers::{
-    decoders::byte_level::ByteLevel as ByteLevelDecoder,
-    models::bpe::BpeBuilder,
-    pre_tokenizers::byte_level::ByteLevel,
-    AddedToken,
-    Tokenizer,
+    AddedToken, Tokenizer, decoders::byte_level::ByteLevel as ByteLevelDecoder,
+    models::bpe::BpeBuilder, pre_tokenizers::byte_level::ByteLevel,
 };
 
 use crate::gguf::{Gguf, MetaEntry, MetaType};
 
-/// 从 Gguf 对象构建 HuggingFace Tokenizer
-pub fn build_tokenizer_from_gguf(gguf: &Gguf) -> Result<Tokenizer> {
-    // 1. tokens
-    let tokens_entry = gguf
-        .find_meta("tokenizer.ggml.tokens")
-        .ok_or_else(|| anyhow!("Missing `tokenizer.ggml.tokens` in .gguf file"))?;
-    
-    let tokens = extract_string_array(tokens_entry).context("解析 tokenizer.ggml.tokens 失败")?;
+#[derive(Debug)]
+pub enum TokenizerError {
+    MissingField(String),
+    ParseError(String),
+    TokenizerError(String),
+    Utf8Error(std::str::Utf8Error),
+}
 
-    let merges_entry = gguf
-        .find_meta("tokenizer.ggml.merges")
-        .ok_or_else(|| anyhow!("GGUF 中缺少 tokenizer.ggml.merges 字段"))?;
-    let merges_raw =
-        extract_string_array(merges_entry).context("解析 tokenizer.ggml.merges 失败")?;
+impl fmt::Display for TokenizerError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            TokenizerError::MissingField(s) => write!(f, "MissingField: {}", s),
+            TokenizerError::ParseError(s) => write!(f, "ParseError: {}", s),
+            TokenizerError::TokenizerError(s) => write!(f, "TokenizerError: {}", s),
+            TokenizerError::Utf8Error(e) => write!(f, "Utf8Error: {}", e),
+        }
+    }
+}
+
+impl std::error::Error for TokenizerError {}
+
+pub fn build_tokenizer_from_gguf(gguf: &Gguf) -> Result<Tokenizer, TokenizerError> {
+    // 1. tokens
+    let tokens_entry = gguf.find_meta("tokenizer.ggml.tokens").ok_or_else(|| {
+        TokenizerError::MissingField("Missing `tokenizer.ggml.tokens` in .gguf file".into())
+    })?;
+
+    let tokens = extract_string_array(tokens_entry)?;
+
+    let merges_entry = gguf.find_meta("tokenizer.ggml.merges").ok_or_else(|| {
+        TokenizerError::MissingField("GGUF 中缺少 tokenizer.ggml.merges 字段".into())
+    })?;
+    let merges_raw = extract_string_array(merges_entry)?;
 
     let token_types = gguf
         .find_meta("tokenizer.ggml.token_type")
@@ -52,7 +68,7 @@ pub fn build_tokenizer_from_gguf(gguf: &Gguf) -> Result<Tokenizer> {
         .vocab_and_merges(vocab, merges)
         .unk_token(unk_token)
         .build()
-        .map_err(|e| anyhow!("构建 BPE 模型失败: {e}"))?;
+        .map_err(|e| TokenizerError::TokenizerError(format!("构建 BPE 模型失败: {e}")))?;
 
     let mut tokenizer = Tokenizer::new(bpe);
 
@@ -70,12 +86,18 @@ pub fn build_tokenizer_from_gguf(gguf: &Gguf) -> Result<Tokenizer> {
 }
 
 /// 从 MetaEntry 中提取字符串数组
-fn extract_string_array(entry: &MetaEntry<'_>) -> Result<Vec<String>> {
+fn extract_string_array(entry: &MetaEntry<'_>) -> Result<Vec<String>, TokenizerError> {
     if entry.ty != MetaType::Array {
-        return Err(anyhow!("期望 Array 类型，但得到 {:?}", entry.ty));
+        return Err(TokenizerError::ParseError(format!(
+            "期望 Array 类型，但得到 {:?}",
+            entry.ty
+        )));
     }
     if entry.array_type != Some(MetaType::String) {
-        return Err(anyhow!("期望 String 数组，但得到 {:?}", entry.array_type));
+        return Err(TokenizerError::ParseError(format!(
+            "期望 String 数组，但得到 {:?}",
+            entry.array_type
+        )));
     }
 
     let mut result = Vec::with_capacity(entry.count as usize);
@@ -84,14 +106,15 @@ fn extract_string_array(entry: &MetaEntry<'_>) -> Result<Vec<String>> {
 
     for _ in 0..entry.count {
         if pos + 8 > data.len() {
-            return Err(anyhow!("字符串长度前缀越界"));
+            return Err(TokenizerError::ParseError(format!("字符串长度前缀越界")));
         }
         let len = u64::from_le_bytes(data[pos..pos + 8].try_into().unwrap()) as usize;
         pos += 8;
         if pos + len > data.len() {
-            return Err(anyhow!("字符串内容越界"));
+            return Err(TokenizerError::ParseError(format!("字符串内容越界")));
         }
-        let s = std::str::from_utf8(&data[pos..pos + len]).context("字符串不是有效的 UTF-8")?;
+        let s =
+            std::str::from_utf8(&data[pos..pos + len]).map_err(|e| TokenizerError::Utf8Error(e))?;
         result.push(s.to_string());
         pos += len;
     }
@@ -100,15 +123,15 @@ fn extract_string_array(entry: &MetaEntry<'_>) -> Result<Vec<String>> {
 }
 
 /// 从 MetaEntry 中提取 i32 数组（用于 token_type）
-fn extract_i32_array(entry: &MetaEntry<'_>) -> Result<Vec<i32>> {
+fn extract_i32_array(entry: &MetaEntry<'_>) -> Result<Vec<i32>, TokenizerError> {
     if entry.ty != MetaType::Array || entry.array_type != Some(MetaType::Int32) {
-        return Err(anyhow!("期望 Int32 数组"));
+        return Err(TokenizerError::ParseError("期望 Int32 数组".into()));
     }
     let mut result = Vec::with_capacity(entry.count as usize);
     let mut pos = 0usize;
     for _ in 0..entry.count {
         if pos + 4 > entry.data.len() {
-            return Err(anyhow!("i32 数组越界"));
+            return Err(TokenizerError::ParseError("i32 数组越界".into()));
         }
         result.push(i32::from_le_bytes(
             entry.data[pos..pos + 4].try_into().unwrap(),
@@ -144,19 +167,18 @@ fn register_special_tokens(
     tokenizer: &mut Tokenizer,
     tokens: &[String],
     token_types: &[i32],
-) -> Result<()> {
+) -> Result<(), TokenizerError> {
     let added: Vec<AddedToken> = token_types
         .iter()
         .enumerate()
-        .filter(|&(_, &t)| t == 3 || t == 2) // Control 或 Unknown
+        .filter(|&(_, &t)| t == 3 || t == 2) // Control or Unknown
         .map(|(i, _)| AddedToken::from(tokens[i].as_str(), true))
         .collect();
 
     if !added.is_empty() {
-        // 同样绕过 .context()，因为 tokenizers 的错误类型是 boxed trait object
         tokenizer
             .add_special_tokens(added)
-            .map_err(|e| anyhow!("注册特殊 token 失败: {e}"))?;
+            .map_err(|e| TokenizerError::TokenizerError(format!("注册特殊 token 失败: {e}")))?;
     }
     Ok(())
 }
