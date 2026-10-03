@@ -109,3 +109,5 @@ pub trait Q38Iq1sRepack {
 }
 
 pub mod ops;
+pub mod quant;
+pub mod tensor;
