@@ -1,10 +1,10 @@
 use crate::gguf::{Gguf, TensorEntry};
 use crate::kernel::Q38Q8KBlock;
 use crate::model::{
-    Q38Attention, Q38Layer, Q38Model, Q38ModelOps, Q38Scratch, Q38_ATTN_HEADS,
-    Q38_ATTN_KV_DIM, Q38_ATTN_Q_DIM, Q38_FFN, Q38_HIDDEN, Q38_LAYERS,
+    Q38_ATTN_HEADS, Q38_ATTN_KV_DIM, Q38_ATTN_Q_DIM, Q38_FFN, Q38_HIDDEN, Q38_LAYERS,
     Q38_LINEAR_HEAD_DIM, Q38_LINEAR_QKV_DIM, Q38_LINEAR_V_DIM, Q38_LINEAR_V_HEADS,
-    Q38_RECURRENT_LAYERS, Q38_TOTAL_FULL_LAYERS, Q38_VOCAB,
+    Q38_RECURRENT_LAYERS, Q38_TOTAL_FULL_LAYERS, Q38_VOCAB, Q38Attention, Q38Layer, Q38Model,
+    Q38ModelOps, Q38Scratch,
 };
 
 fn layer_tensor<'a>(
@@ -88,10 +88,8 @@ impl<'a> Q38Model<'a> {
         }
 
         let conv_count = Q38_RECURRENT_LAYERS * Q38_LINEAR_QKV_DIM * 3;
-        let delta_count = Q38_RECURRENT_LAYERS
-            * Q38_LINEAR_V_HEADS
-            * Q38_LINEAR_HEAD_DIM
-            * Q38_LINEAR_HEAD_DIM;
+        let delta_count =
+            Q38_RECURRENT_LAYERS * Q38_LINEAR_V_HEADS * Q38_LINEAR_HEAD_DIM * Q38_LINEAR_HEAD_DIM;
         let kv_count = Q38_TOTAL_FULL_LAYERS * context_length as usize * Q38_ATTN_KV_DIM;
 
         Ok(Q38Model {

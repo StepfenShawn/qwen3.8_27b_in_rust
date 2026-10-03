@@ -1,7 +1,7 @@
 mod gguf;
-mod tokenizer;
 mod kernel;
 mod model;
+mod tokenizer;
 
 use gguf::Gguf;
 use model::{Q38Model, Q38ModelOps};
@@ -193,8 +193,8 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let tokenizer = tokenizer::build_tokenizer_from_gguf(&gguf)?;
     let eos = gguf.meta_u32("tokenizer.ggml.eos_token_id").unwrap_or(0);
 
-    let mut model = Q38Model::open_gguf(&gguf, options.context)
-        .map_err(|_| "unable to open model")?;
+    let mut model =
+        Q38Model::open_gguf(&gguf, options.context).map_err(|_| "unable to open model")?;
 
     let prompt = render_prompt(
         options.prompt.as_deref().unwrap(),
