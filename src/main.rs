@@ -4,6 +4,7 @@ mod model;
 mod tokenizer;
 
 use gguf::Gguf;
+use kernel::Q38Iq1sRepack;
 use model::{Q38Model, Q38ModelOps};
 use std::io::{self, Write};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
@@ -27,6 +28,7 @@ struct Options {
     presence_penalty: f32,
     thinking: bool,
     reasoning_effort: i32,
+    threads: Option<usize>,
 }
 
 impl Default for Options {
@@ -48,6 +50,7 @@ impl Default for Options {
             presence_penalty: 0.0,
             thinking: true,
             reasoning_effort: EFFORT_XHIGH,
+            threads: None,
         }
     }
 }
@@ -65,6 +68,8 @@ fn usage() {
          \x20 --presence-penalty N\n\
          \x20 --no-thinking       answer directly instead of showing reasoning\n\
          \x20 --reasoning-effort N  low, medium, or xhigh (default: xhigh)\n\
+         \x20 --threads N         worker threads for the kernels (default: one per core,\n\
+         \x20                     also honoured through RAYON_NUM_THREADS)\n\
          \x20 --seed N            sampling seed"
     );
 }
@@ -130,6 +135,15 @@ fn parse_args() -> Result<Options, String> {
                 };
             }
             "--no-thinking" => opts.thinking = false,
+            "--threads" => {
+                let threads: usize = next("--threads")?
+                    .parse()
+                    .map_err(|_| "invalid --threads".to_string())?;
+                if threads == 0 {
+                    return Err("--threads must be at least 1".to_string());
+                }
+                opts.threads = Some(threads);
+            }
             "--help" | "-h" => {
                 usage();
                 std::process::exit(0);
@@ -187,9 +201,22 @@ fn render_prompt(user: &str, system: Option<&str>, thinking: bool, effort: i32) 
 
 fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let options = parse_args()?;
+    // The kernels draw from rayon's global pool, so `--threads` has to be
+    // installed before the first parallel region runs.
+    if let Some(threads) = options.threads {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(threads)
+            .build_global()
+            .map_err(|error| format!("unable to start {threads} worker threads: {error}"))?;
+    }
     let model_path = options.model.as_deref().unwrap();
 
-    let gguf = Gguf::open(model_path)?;
+    let mut gguf = Gguf::open(model_path)?;
+    // IQ1_S checkpoints get a second, SIMD-friendly view of their weight
+    // blocks. The mapping stays authoritative; this only adds derived state.
+    if let Err(error) = gguf.prepare_iq1_s_repacks() {
+        eprintln!("qwen38: IQ1 runtime repack unavailable; using packed weights ({error})");
+    }
     let tokenizer = tokenizer::build_tokenizer_from_gguf(&gguf)?;
     let eos = gguf.meta_u32("tokenizer.ggml.eos_token_id").unwrap_or(0);
 
@@ -247,6 +274,10 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         generated += 1;
         last_ready = Instant::now();
         if model.position() >= model.context_length() {
+            eprintln!(
+                "qwen38: context is full ({} positions); restart with a larger --context",
+                model.context_length()
+            );
             break;
         }
         logits = model.forward_token(token).map_err(|_| "forward failed")?;
@@ -261,9 +292,10 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     let elapsed = started.elapsed().as_secs_f64();
     eprintln!(
-        "[prompt={} tokens, output={} tokens, elapsed={:.3}s",
+        "[prompt={} tokens, output={} tokens, threads={}, elapsed={:.3}s",
         ids.len(),
         generated,
+        rayon::current_num_threads(),
         elapsed
     );
     if let Some(first) = first_ready {

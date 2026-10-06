@@ -1,6 +1,8 @@
 use crate::kernel::{
     Q38CoreError, Q38CoreResult, Q38Q8KBlock, Q38QuantOps, Q38_Q8_K_BLOCK_SIZE,
+    q38_parallel_over,
 };
+use rayon::prelude::*;
 
 pub struct Q38Quant;
 
@@ -49,9 +51,52 @@ pub fn bf16_to_f32(data: &[u8]) -> f32 {
     f32::from_bits((load_u16(data) as u32) << 16)
 }
 
-pub fn quantize_q8_k(output: &mut [Q38Q8KBlock], input: &[f32]) -> Q38CoreResult<()> {
+/// Quantizes one 256-wide block. Blocks are independent, which is what lets
+/// the block loop run across the pool.
+fn quantize_block(quantized: &mut Q38Q8KBlock, values: &[f32]) {
     const BLOCK: usize = Q38_Q8_K_BLOCK_SIZE;
     const GROUP: usize = 16;
+
+    let mut maximum = 0.0f32;
+    let mut absolute_maximum = 0.0f32;
+    for &value in values {
+        let absolute = value.abs();
+        if absolute > absolute_maximum {
+            absolute_maximum = absolute;
+            maximum = value;
+        }
+    }
+
+    if absolute_maximum == 0.0f32 {
+        quantized.scale = 0.0;
+        quantized.quants.fill(0);
+        quantized.sums.fill(0);
+        return;
+    }
+
+    let inverse_scale = -127.0f32 / maximum;
+    for (i, &value) in values.iter().enumerate() {
+        let mut quant = nearest_int(inverse_scale * value);
+        if quant > 127 {
+            quant = 127;
+        }
+        quantized.quants[i] = quant as i8;
+    }
+
+    debug_assert_eq!(values.len(), BLOCK);
+    for group in 0..BLOCK / GROUP {
+        let mut sum = 0i32;
+        for i in 0..GROUP {
+            sum += quantized.quants[group * GROUP + i] as i32;
+        }
+        quantized.sums[group] = sum as i16;
+    }
+
+    quantized.scale = 1.0f32 / inverse_scale;
+}
+
+pub fn quantize_q8_k(output: &mut [Q38Q8KBlock], input: &[f32]) -> Q38CoreResult<()> {
+    const BLOCK: usize = Q38_Q8_K_BLOCK_SIZE;
 
     if input.len() % BLOCK != 0 {
         return Err(Q38CoreError::LengthNotDivisibleByBlock {
@@ -66,45 +111,18 @@ pub fn quantize_q8_k(output: &mut [Q38Q8KBlock], input: &[f32]) -> Q38CoreResult
         });
     }
 
-    for block in 0..blocks {
-        let values = &input[block * BLOCK..(block + 1) * BLOCK];
-        let quantized = &mut output[block];
-
-        let mut maximum = 0.0f32;
-        let mut absolute_maximum = 0.0f32;
-        for &value in values {
-            let absolute = value.abs();
-            if absolute > absolute_maximum {
-                absolute_maximum = absolute;
-                maximum = value;
-            }
+    let output = &mut output[..blocks];
+    // Worth a handoff only for prompt-sized activations; one token is 20
+    // blocks and stays on the calling thread.
+    if q38_parallel_over(blocks, BLOCK) {
+        output
+            .par_iter_mut()
+            .zip(input.par_chunks(BLOCK))
+            .for_each(|(quantized, values)| quantize_block(quantized, values));
+    } else {
+        for (quantized, values) in output.iter_mut().zip(input.chunks(BLOCK)) {
+            quantize_block(quantized, values);
         }
-
-        if absolute_maximum == 0.0f32 {
-            quantized.scale = 0.0;
-            quantized.quants.fill(0);
-            quantized.sums.fill(0);
-            continue;
-        }
-
-        let inverse_scale = -127.0f32 / maximum;
-        for (i, &value) in values.iter().enumerate() {
-            let mut quant = nearest_int(inverse_scale * value);
-            if quant > 127 {
-                quant = 127;
-            }
-            quantized.quants[i] = quant as i8;
-        }
-
-        for group in 0..BLOCK / GROUP {
-            let mut sum = 0i32;
-            for i in 0..GROUP {
-                sum += quantized.quants[group * GROUP + i] as i32;
-            }
-            quantized.sums[group] = sum as i16;
-        }
-
-        quantized.scale = 1.0f32 / inverse_scale;
     }
 
     Ok(())

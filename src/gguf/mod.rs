@@ -318,6 +318,12 @@ impl Gguf {
         &self.tensors
     }
 
+    /// Mutable view used by optional kernel repacks; the mapped tensor data
+    /// itself is never modified, only the derived views stored next to it.
+    pub fn tensors_mut(&mut self) -> &mut [TensorEntry<'static>] {
+        &mut self.tensors
+    }
+
     pub fn metadata(&self) -> &[MetaEntry<'static>] {
         &self.metadata
     }

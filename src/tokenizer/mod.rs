@@ -162,7 +162,6 @@ fn find_special_token(
     None
 }
 
-/// 将特殊 token 注册到 tokenizer 中
 fn register_special_tokens(
     tokenizer: &mut Tokenizer,
     tokens: &[String],
@@ -171,7 +170,7 @@ fn register_special_tokens(
     let added: Vec<AddedToken> = token_types
         .iter()
         .enumerate()
-        .filter(|&(_, &t)| t == 3 || t == 2) // Control or Unknown
+        .filter(|&(_, &t)| t == 3 || t == 4) // Control or UserDefined
         .map(|(i, _)| AddedToken::from(tokens[i].as_str(), true))
         .collect();
 

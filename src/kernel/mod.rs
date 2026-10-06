@@ -1,6 +1,21 @@
 /// Number of weights per Q8_K block.
 pub const Q38_Q8_K_BLOCK_SIZE: usize = 256;
 
+/// Work, in element-operations, below which a loop stays on the calling thread.
+pub const Q38_PARALLEL_MIN_WORK: usize = 1 << 18;
+
+/// True when `items` iterations of roughly `per_item` operations carry enough
+/// work to be worth splitting across the pool.
+///
+/// Gating on the product rather than the iteration count keeps narrow loops
+/// sequential: the 48-row `alpha`/`beta` projections and the 4-wide
+/// `ssm_conv1d` matrix never clear the bar, while every attention and FFN
+/// projection does.
+#[inline]
+pub fn q38_parallel_over(items: usize, per_item: usize) -> bool {
+    items >= 2 && items.saturating_mul(per_item) >= Q38_PARALLEL_MIN_WORK
+}
+
 /// One Q8_K activation quantization block.
 pub struct Q38Q8KBlock {
     /// Per-block dequantization scala.
@@ -103,11 +118,10 @@ pub trait Q38TensorOps {
 pub trait Q38Iq1sRepack {
     /// Build the SIMD views. Idempotent if already prepared.
     fn prepare_iq1_s_repacks(&mut self) -> Q38CoreResult<()>;
-
-    /// Release the SIMD views and any associated allocations.
-    fn release_iq1_s_repacks(&mut self);
 }
 
+pub mod iq;
+pub mod iq_tables;
 pub mod ops;
 pub mod quant;
 pub mod tensor;

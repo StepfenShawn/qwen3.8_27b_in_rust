@@ -1,3 +1,4 @@
 /target
 /c_repo
+.workbuddy
 *.gguf

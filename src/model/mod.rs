@@ -1,6 +1,6 @@
 use crate::{
     gguf::{Gguf, TensorEntry},
-    kernel::Q38Q8KBlock,
+    kernel::{Q38Q8KBlock, Q38_Q8_K_BLOCK_SIZE},
 };
 
 pub const Q38_HIDDEN: usize = 5120;
@@ -56,6 +56,7 @@ pub struct Q38Layer<'a> {
     pub attention: Q38Attention<'a>,
 }
 
+#[derive(Clone, Copy)]
 pub struct Q38MTPWeights<'a> {
     pub eh_proj: &'a TensorEntry<'a>,
     pub enorm: &'a TensorEntry<'a>,
@@ -96,6 +97,32 @@ pub struct Q38BatchScratch {
     pub quantized: Vec<Q38Q8KBlock>,
 }
 
+impl Q38BatchScratch {
+    /// Reserve the token-major scratch used by [`Q38ModelOps::prefill`] and the
+    /// speculative verifier. Each buffer keeps the stride the kernel expects,
+    /// which is why `wide0` is sized for the FFN even though it also carries
+    /// the narrower attention activations.
+    pub fn new(count: usize) -> Self {
+        let quantized = (0..count * (Q38_FFN / Q38_Q8_K_BLOCK_SIZE))
+            .map(|_| Q38Q8KBlock::default())
+            .collect();
+        Self {
+            hidden: vec![0.0f32; count * Q38_HIDDEN],
+            norm: vec![0.0f32; count * Q38_HIDDEN],
+            branch: vec![0.0f32; count * Q38_HIDDEN],
+            wide0: vec![0.0f32; count * Q38_FFN],
+            wide1: vec![0.0f32; count * Q38_FFN],
+            key: vec![0.0f32; count * Q38_ATTN_KV_DIM],
+            value: vec![0.0f32; count * Q38_ATTN_KV_DIM],
+            attention: vec![0.0f32; count * Q38_LINEAR_V_DIM],
+            beta: vec![0.0f32; count * Q38_LINEAR_V_HEADS],
+            alpha: vec![0.0f32; count * Q38_LINEAR_V_HEADS],
+            target_norm: vec![0.0f32; count * Q38_HIDDEN],
+            quantized,
+        }
+    }
+}
+
 pub struct Q38Model<'a> {
     pub gguf: &'a Gguf,
     pub mtp_gguf: Option<&'a Gguf>,
@@ -134,10 +161,42 @@ pub struct Q38Model<'a> {
 }
 
 pub trait Q38ModelOps<'a>: Sized {
+    /// Open a checkpoint, bind every base weight and reserve the inference
+    /// state for `context_length` positions.
     fn open_gguf(gguf: &'a Gguf, context_length: u32) -> Result<Self, i32>;
+
+    /// Attach a checkpoint that hosts the native one-layer MTP head. Only
+    /// valid before the first token has been evaluated.
+    fn attach_mtp_gguf(&mut self, gguf: &'a Gguf) -> Result<(), i32>;
+
     fn reset(&mut self);
+
+    /// Evaluate one token through the complete model. The returned logits stay
+    /// owned by the model and are replaced by the next call.
     fn forward_token(&mut self, token_id: u32) -> Result<&[f32], i32>;
+
+    /// Layer-major prompt evaluation; the output is the logits after the final
+    /// token and recurrent/KV state advances by `tokens.len()` positions.
     fn prefill(&mut self, tokens: &[u32]) -> Result<&[f32], i32>;
+
+    /// Enable and probe the checkpoint's native one-layer MTP head.
+    fn enable_mtp(&mut self) -> Result<(), i32>;
+
+    /// Draft one token with the MTP head.
+    fn mtp_forward(&mut self, token_id: u32) -> Result<&[f32], i32>;
+
+    /// Consume the pending target token and verify up to `draft_count` MTP
+    /// proposals. `accepted` receives the newly available tokens after
+    /// `token_id` and the returned count is how many were committed; the final
+    /// token stays pending for the next call. Greedy only, and the emitted
+    /// sequence matches the target model's greedy decode exactly.
+    fn speculative_greedy(
+        &mut self,
+        token_id: u32,
+        stop_token: u32,
+        draft_count: u32,
+        accepted: &mut [u32],
+    ) -> Result<(&[f32], u32), i32>;
 
     fn vocab_size(&self) -> u32;
     fn position(&self) -> u32;
