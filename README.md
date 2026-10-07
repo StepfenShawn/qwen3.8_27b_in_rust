@@ -4,7 +4,7 @@ Run the Qwen3.8 27B LLM on one laptop CPU. Written in pure rust: no BLAS, no fra
 # Requirements
 | | |
 | --- | --- |
-| OS  | Linux/x86-64, Windows/x86-64, MacOS/arm is coming soon! |
+| OS  | Linux/x86-64, Windows/x86-64, MacOS/arm64 is coming soon! |
 | CPU | AVX2 + FMA on x86-64 is better, NEON on arm64 is coming soon! |
 | GPU | NO |
 | RAM | >=8GB |

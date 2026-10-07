@@ -85,6 +85,20 @@ pub fn build_tokenizer_from_gguf(gguf: &Gguf) -> Result<Tokenizer, TokenizerErro
     Ok(tokenizer)
 }
 
+pub fn get_all_control_token_ids(gguf: &Gguf) -> Vec<u32> {
+    gguf.find_meta("tokenizer.ggml.token_type")
+        .and_then(|entry| extract_i32_array(entry).ok())
+        .map(|types| {
+            types
+                .iter()
+                .enumerate()
+                .filter(|&(_, &token_type)| token_type == 3)
+                .map(|(id, _)| id as u32)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 /// 从 MetaEntry 中提取字符串数组
 fn extract_string_array(entry: &MetaEntry<'_>) -> Result<Vec<String>, TokenizerError> {
     if entry.ty != MetaType::Array {

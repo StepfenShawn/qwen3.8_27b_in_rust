@@ -6,6 +6,7 @@ mod tokenizer;
 use gguf::Gguf;
 use kernel::Q38Iq1sRepack;
 use model::{Q38Model, Q38ModelOps};
+use std::collections::HashSet;
 use std::io::{self, Write};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
@@ -220,6 +221,9 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let tokenizer = tokenizer::build_tokenizer_from_gguf(&gguf)?;
     let eos = gguf.meta_u32("tokenizer.ggml.eos_token_id").unwrap_or(0);
 
+    let control_tokens: HashSet<u32> = tokenizer::get_all_control_token_ids(&gguf).into_iter().collect();
+    let think_close = tokenizer.token_to_id("</think>");
+
     let mut model =
         Q38Model::open_gguf(&gguf, options.context).map_err(|_| "unable to open model")?;
 
@@ -258,6 +262,8 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         print!("<think>\n");
     }
 
+    let mut closed_thinking = !options.thinking;
+
     while generated < options.max_tokens {
         let token = sampler.sample(logits);
         sampler.observe(token);
@@ -267,9 +273,14 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         if generated == 0 {
             first_ready = Some(Instant::now());
         }
-        let text = tokenizer.decode(&[token], true)?;
-        print!("{text}");
-        io::stdout().flush().ok();
+        if !control_tokens.contains(&token) {
+            let text = tokenizer.decode(&[token], false)?;
+            print!("{text}");
+            io::stdout().flush().ok();
+        }
+        if Some(token) == think_close {
+            closed_thinking = true;
+        }
         generated += 1;
         last_ready = Instant::now();
         if model.position() >= model.context_length() {
@@ -283,10 +294,12 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     }
 
     let truncated = generated >= options.max_tokens;
-    if truncated && options.thinking {
+    if truncated && !closed_thinking {
         print!("\n</think>\n\n");
+        io::stdout().flush().ok();
+    } else {
+        print!("\n");
     }
-    print!("\n");
     io::stdout().flush().ok();
 
     let elapsed = started.elapsed().as_secs_f64();
