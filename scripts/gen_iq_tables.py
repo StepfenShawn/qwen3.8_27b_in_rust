@@ -26,7 +26,6 @@ try:
     req = urllib.request.Request(ggml_common_h_url, headers={"User-Agent": "python-reader"})
     with urllib.request.urlopen(req, timeout=15) as resp:
         text = resp.read().decode("utf-8")
-    print(text[:2000])
     with open(f"{ROOT}/scripts/ggml-common.h", "w", encoding="utf-8") as f:
         f.write(text)
 except urllib.error.HTTPError as e:

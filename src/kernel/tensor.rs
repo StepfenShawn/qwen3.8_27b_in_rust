@@ -457,7 +457,7 @@ fn dot_q6_k_q8_k_scalar(data: &[u8], q: &[Q38Q8KBlock], blocks: usize) -> f32 {
     total
 }
 
-// ---- AVX2 hot paths ----
+// ---- SIMD paths ----
 
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2,fma")]
