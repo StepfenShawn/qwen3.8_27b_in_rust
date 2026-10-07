@@ -253,7 +253,6 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let mut first_ready: Option<Instant> = None;
     let mut last_ready = started;
     let mut generated = 0u32;
-    let mut truncated = false;
 
     if options.thinking {
         print!("<think>\n");
@@ -283,7 +282,7 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         logits = model.forward_token(token).map_err(|_| "forward failed")?;
     }
 
-    truncated = generated >= options.max_tokens;
+    let truncated = generated >= options.max_tokens;
     if truncated && options.thinking {
         print!("\n</think>\n\n");
     }
