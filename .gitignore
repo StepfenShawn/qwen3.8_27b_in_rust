@@ -2,3 +2,4 @@
 /c_repo
 .workbuddy
 *.gguf
+scripts/ggml-common.h

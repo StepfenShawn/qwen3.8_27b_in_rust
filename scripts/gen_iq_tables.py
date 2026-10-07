@@ -16,6 +16,24 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+
+import urllib.request
+import urllib.error
+
+ggml_common_h_url = "https://raw.githubusercontent.com/ggml-org/llama.cpp/refs/heads/master/ggml/src/ggml-common.h"
+
+try:
+    req = urllib.request.Request(ggml_common_h_url, headers={"User-Agent": "python-reader"})
+    with urllib.request.urlopen(req, timeout=15) as resp:
+        text = resp.read().decode("utf-8")
+    print(text[:2000])
+    with open(f"{ROOT}/scripts/ggml-common.h", "w", encoding="utf-8") as f:
+        f.write(text)
+except urllib.error.HTTPError as e:
+    print("HTTPError:", e.code, e.reason)
+except urllib.error.URLError as e:
+    print("URLError:", e.reason)
+
 SOURCE = ROOT / "scripts" / "ggml-common.h"
 TARGET = ROOT / "src" / "kernel" / "iq_tables.rs"
 
