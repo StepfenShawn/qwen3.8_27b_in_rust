@@ -125,3 +125,13 @@ pub mod iq_tables;
 pub mod ops;
 pub mod quant;
 pub mod tensor;
+
+#[cfg(target_arch = "x86_64")]
+pub mod x86;
+#[cfg(target_arch = "aarch64")]
+pub mod neon;
+
+#[cfg(target_arch = "x86_64")]
+pub(crate) use x86 as simd;
+#[cfg(target_arch = "aarch64")]
+pub(crate) use neon as simd;
