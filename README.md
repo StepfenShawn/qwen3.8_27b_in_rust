@@ -45,6 +45,8 @@ cargo build --release
 
 # Fetch the checkpoint
 * [Qwen3.8-27B-UD-Q4_K_M](https://www.modelscope.cn/models/unsloth/Qwen3.8-27B-GGUF/resolve/ba7608d4e5e1f3ea3d016cebd1c972c42686e9da/Qwen3.8-27B-UD-Q4_K_M.gguf)
+* [Qwen3.8-27B-UD-IQ2_M](https://www.modelscope.cn/models/unsloth/Qwen3.8-27B-GGUF/resolve/1939530128ebc56fdd0213d25583cb85147c1cd5/Qwen3.8-27B-UD-IQ2_M.gguf)
+* [Qwen3.8-27B-UD-IQ1_M](https://www.modelscope.cn/models/unsloth/Qwen3.8-27B-GGUF/resolve/1fa4a98544ac96043a10649853051f1d5e72a008/Qwen3.8-27B-UD-IQ1_M.gguf)
 
 # Benchmark
 Coming soon!  

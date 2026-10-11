@@ -8,8 +8,8 @@
 //! releases it again when the caller is done.
 
 use crate::gguf::{GgmlType, Gguf};
-use crate::kernel::iq::{repack_iq1_s, IQ1S_BLOCK_BYTES};
-use crate::kernel::{Q38CoreError, Q38CoreResult, Q38Iq1sRepack, Q38_Q8_K_BLOCK_SIZE};
+use crate::kernel::iq::{IQ1S_BLOCK_BYTES, repack_iq1_s};
+use crate::kernel::{Q38_Q8_K_BLOCK_SIZE, Q38CoreError, Q38CoreResult, Q38Iq1sRepack};
 
 impl Q38Iq1sRepack for Gguf {
     fn prepare_iq1_s_repacks(&mut self) -> Q38CoreResult<()> {

@@ -1,11 +1,10 @@
-﻿#![allow(unsafe_op_in_unsafe_fn)]
+#![allow(unsafe_op_in_unsafe_fn)]
 
 use crate::gguf::{GgmlType, TensorEntry};
 use crate::kernel::iq;
 use crate::kernel::quant::{bf16_to_f32, f16_to_f32};
 use crate::kernel::{
-    Q38CoreError, Q38CoreResult, Q38Q8KBlock, Q38TensorOps, Q38_Q8_K_BLOCK_SIZE,
-    q38_parallel_over,
+    Q38_Q8_K_BLOCK_SIZE, Q38CoreError, Q38CoreResult, Q38Q8KBlock, Q38TensorOps, q38_parallel_over,
 };
 use rayon::prelude::*;
 
@@ -174,8 +173,7 @@ fn dot_q3_k_scalar(data: &[u8], input: &[f32], n: usize) -> f32 {
                         - if high[lane] & high_bit != 0 { 0 } else { 4 };
                     let scale = scales[group * 2 + lane / 16] as i32;
                     let offset = base + half * 128 + field * 32 + lane;
-                    total =
-                        (d * scale as f32 * q as f32).mul_add(input[offset], total);
+                    total = (d * scale as f32 * q as f32).mul_add(input[offset], total);
                 }
                 group += 1;
                 high_bit <<= 1;
@@ -210,7 +208,8 @@ fn dot_q4_k_scalar(data: &[u8], input: &[f32], n: usize) -> f32 {
                 total = (d0 * (data[quants + i] & 15) as f32 - m0).mul_add(input[x + i], total);
             }
             for i in 0..32 {
-                total = (d1 * (data[quants + i] >> 4) as f32 - m1).mul_add(input[x + 32 + i], total);
+                total =
+                    (d1 * (data[quants + i] >> 4) as f32 - m1).mul_add(input[x + 32 + i], total);
             }
             quants += 32;
             scale_index += 2;
@@ -244,13 +243,13 @@ fn dot_q5_k_scalar(data: &[u8], input: &[f32], n: usize) -> f32 {
             let m1 = dmin * min1 as f32;
             let x = base + chunk * 64;
             for i in 0..32 {
-                let q = (low[chunk * 32 + i] & 15) as i32
-                    + if high[i] & high0 != 0 { 16 } else { 0 };
+                let q =
+                    (low[chunk * 32 + i] & 15) as i32 + if high[i] & high0 != 0 { 16 } else { 0 };
                 total = (d0 * q as f32 - m0).mul_add(input[x + i], total);
             }
             for i in 0..32 {
-                let q = (low[chunk * 32 + i] >> 4) as i32
-                    + if high[i] & high1 != 0 { 16 } else { 0 };
+                let q =
+                    (low[chunk * 32 + i] >> 4) as i32 + if high[i] & high1 != 0 { 16 } else { 0 };
                 total = (d1 * q as f32 - m1).mul_add(input[x + 32 + i], total);
             }
             scale_index += 2;
@@ -283,9 +282,12 @@ fn dot_q6_k_scalar(data: &[u8], input: &[f32], n: usize) -> f32 {
                 let q2 = ((low_i >> 4) | (((h >> 4) & 3) << 4)) as i32 - 32;
                 let q3 = ((low_i2 >> 4) | (((h >> 6) & 3) << 4)) as i32 - 32;
                 total = (d * scales[si] as i8 as f32 * q0 as f32).mul_add(input[x + i], total);
-                total = (d * scales[si + 2] as i8 as f32 * q1 as f32).mul_add(input[x + 32 + i], total);
-                total = (d * scales[si + 4] as i8 as f32 * q2 as f32).mul_add(input[x + 64 + i], total);
-                total = (d * scales[si + 6] as i8 as f32 * q3 as f32).mul_add(input[x + 96 + i], total);
+                total =
+                    (d * scales[si + 2] as i8 as f32 * q1 as f32).mul_add(input[x + 32 + i], total);
+                total =
+                    (d * scales[si + 4] as i8 as f32 * q2 as f32).mul_add(input[x + 64 + i], total);
+                total =
+                    (d * scales[si + 6] as i8 as f32 * q3 as f32).mul_add(input[x + 96 + i], total);
             }
         }
         base += BLOCK;
@@ -407,10 +409,10 @@ pub(crate) fn dot_q5_k_q8_k_scalar(data: &[u8], q: &[Q38Q8KBlock], blocks: usize
             let mut dot0 = 0i32;
             let mut dot1 = 0i32;
             for i in 0..32 {
-                let qv0 = (low[chunk * 32 + i] & 15) as i32
-                    + if high[i] & high0 != 0 { 16 } else { 0 };
-                let qv1 = (low[chunk * 32 + i] >> 4) as i32
-                    + if high[i] & high1 != 0 { 16 } else { 0 };
+                let qv0 =
+                    (low[chunk * 32 + i] & 15) as i32 + if high[i] & high0 != 0 { 16 } else { 0 };
+                let qv1 =
+                    (low[chunk * 32 + i] >> 4) as i32 + if high[i] & high1 != 0 { 16 } else { 0 };
                 dot0 += qv0 * b.quants[chunk * 64 + i] as i32;
                 dot1 += qv1 * b.quants[chunk * 64 + 32 + i] as i32;
             }
@@ -458,63 +460,64 @@ fn dot_q6_k_q8_k_scalar(data: &[u8], q: &[Q38Q8KBlock], blocks: usize) -> f32 {
 
 #[inline]
 fn dot_f32(data: &[u8], input: &[f32], n: usize) -> f32 {
-    #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
-    if let Some(v) = crate::kernel::simd::tensor::try_dot_f32(data, input, n) {
-        return v;
+    #[cfg(target_arch = "x86_64")]
+    if super::avx2_fma() {
+        return crate::kernel::x86::tensor::dot_f32(data, input, n);
     }
     dot_f32_scalar(data, input, n)
 }
 
 #[inline]
 fn dot_f16(data: &[u8], input: &[f32], n: usize) -> f32 {
-    #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
-    if let Some(v) = crate::kernel::simd::tensor::try_dot_f16(data, input, n) {
-        return v;
+    #[cfg(target_arch = "x86_64")]
+    if super::avx2_fma_f16c() {
+        return crate::kernel::x86::tensor::dot_f16(data, input, n);
     }
     dot_f16_scalar(data, input, n)
 }
 
 #[inline]
 fn dot_q4_k_q8_k(data: &[u8], q: &[Q38Q8KBlock], blocks: usize) -> f32 {
-    #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
-    if let Some(v) = crate::kernel::simd::tensor::try_dot_q4_k_q8_k(data, q, blocks) {
-        return v;
+    #[cfg(target_arch = "x86_64")]
+    if super::avx2_fma() {
+        return crate::kernel::x86::tensor::dot_q4_k_q8_k(data, q, blocks);
     }
     dot_q4_k_q8_k_scalar(data, q, blocks)
 }
 
 #[inline]
 fn dot_q6_k_q8_k(data: &[u8], q: &[Q38Q8KBlock], blocks: usize) -> f32 {
-    #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
-    if let Some(v) = crate::kernel::simd::tensor::try_dot_q6_k_q8_k(data, q, blocks) {
-        return v;
+    #[cfg(target_arch = "x86_64")]
+    if super::avx2_fma() {
+        return crate::kernel::x86::tensor::dot_q6_k_q8_k(data, q, blocks);
     }
     dot_q6_k_q8_k_scalar(data, q, blocks)
 }
 
 #[inline]
 fn dot_q3_k_q8_k(data: &[u8], q: &[Q38Q8KBlock], blocks: usize) -> f32 {
-    #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
-    if let Some(v) = crate::kernel::simd::tensor::try_dot_q3_k_q8_k(data, q, blocks) {
-        return v;
+    #[cfg(target_arch = "x86_64")]
+    if super::avx2_fma() {
+        return crate::kernel::x86::tensor::dot_q3_k_q8_k(data, q, blocks);
     }
     dot_q3_k_q8_k_scalar(data, q, blocks)
 }
 
 #[inline]
 fn dot_q5_k_q8_k(data: &[u8], q: &[Q38Q8KBlock], blocks: usize) -> f32 {
-    #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
-    if let Some(v) = crate::kernel::simd::tensor::try_dot_q5_k_q8_k(data, q, blocks) {
-        return v;
+    #[cfg(target_arch = "x86_64")]
+    if super::avx2_fma() {
+        return crate::kernel::x86::tensor::dot_q5_k_q8_k(data, q, blocks);
     }
     dot_q5_k_q8_k_scalar(data, q, blocks)
 }
 
 #[inline]
 fn dot_q8_0(data: &[u8], input: &[f32], n: usize) -> f32 {
-    #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
-    if let Some(v) = crate::kernel::simd::tensor::try_dot_q8_0(data, input, n) {
-        return v;
+    #[cfg(target_arch = "x86_64")]
+    // Q8_0 blocks are 32 values wide; anything else stays on the scalar path.
+    if n % 32 == 0 || super::avx2_fma_f16c() {
+        return crate::kernel::x86::tensor::dot_q8_0(data, input, n);
     }
     dot_q8_0_scalar(data, input, n)
 }
@@ -620,7 +623,10 @@ mod tests {
                 representatives.push((key, tensor));
             }
         }
-        assert!(!representatives.is_empty(), "no supported 2-D tensors found");
+        assert!(
+            !representatives.is_empty(),
+            "no supported 2-D tensors found"
+        );
         println!(
             "{types_seen} 2-D tensors across {} distinct quant types",
             representatives.len()
@@ -840,7 +846,9 @@ mod tests {
                 }
             }
             let mut gemm = vec![0.0f32; batch * rows];
-            tensor.tensor_gemm_f32(&mut gemm, &tokens, batch as u32).unwrap();
+            tensor
+                .tensor_gemm_f32(&mut gemm, &tokens, batch as u32)
+                .unwrap();
             for &row in &probes {
                 for token in 0..batch {
                     let expected = dot_row(
@@ -879,8 +887,9 @@ mod tests {
                 );
             }
 
-            let mut wide: Vec<Q38Q8KBlock> =
-                (0..batch * blocks).map(|_| Q38Q8KBlock::default()).collect();
+            let mut wide: Vec<Q38Q8KBlock> = (0..batch * blocks)
+                .map(|_| Q38Q8KBlock::default())
+                .collect();
             for token in 0..batch {
                 let mut per_token = x.clone();
                 for value in per_token.iter_mut() {
@@ -890,7 +899,9 @@ mod tests {
             }
             assert!(q38_parallel_over(rows, width * batch));
             let mut gemm = vec![0.0f32; batch * rows];
-            tensor.tensor_gemm_q8_k(&mut gemm, &wide, batch as u32).unwrap();
+            tensor
+                .tensor_gemm_q8_k(&mut gemm, &wide, batch as u32)
+                .unwrap();
             for &row in &probes {
                 for token in 0..batch {
                     let expected = dot_q8_k(
@@ -907,7 +918,10 @@ mod tests {
                     );
                 }
             }
-            println!("{name} ({:?}): {rows}x{width} serial == parallel", tensor.ty);
+            println!(
+                "{name} ({:?}): {rows}x{width} serial == parallel",
+                tensor.ty
+            );
         }
     }
 }
@@ -1024,8 +1038,8 @@ impl Q38TensorOps for TensorEntry<'_> {
         if self.n_dims != 2 || row >= rows {
             return Err(Q38CoreError::RowOutOfBounds { row, rows });
         }
-        let rbytes = row_bytes(self.ty, width)
-            .ok_or(Q38CoreError::UnsupportedQuantType(self.ty as u32))?;
+        let rbytes =
+            row_bytes(self.ty, width).ok_or(Q38CoreError::UnsupportedQuantType(self.ty as u32))?;
         if output.len() < width {
             return Err(Q38CoreError::ShapeMismatch {
                 expected: width as u64,
@@ -1066,8 +1080,8 @@ impl Q38TensorOps for TensorEntry<'_> {
         if !supported_f32_gemv(self.ty) {
             return Err(Q38CoreError::UnsupportedQuantType(self.ty as u32));
         }
-        let rbytes = row_bytes(self.ty, width)
-            .ok_or(Q38CoreError::UnsupportedQuantType(self.ty as u32))?;
+        let rbytes =
+            row_bytes(self.ty, width).ok_or(Q38CoreError::UnsupportedQuantType(self.ty as u32))?;
         if input.len() < width {
             return Err(Q38CoreError::ShapeMismatch {
                 expected: width as u64,
@@ -1087,8 +1101,8 @@ impl Q38TensorOps for TensorEntry<'_> {
         if !supported_f32_gemv(self.ty) {
             return Err(Q38CoreError::UnsupportedQuantType(self.ty as u32));
         }
-        let rbytes = row_bytes(self.ty, width)
-            .ok_or(Q38CoreError::UnsupportedQuantType(self.ty as u32))?;
+        let rbytes =
+            row_bytes(self.ty, width).ok_or(Q38CoreError::UnsupportedQuantType(self.ty as u32))?;
         if input.len() < width {
             return Err(Q38CoreError::ShapeMismatch {
                 expected: width as u64,
@@ -1123,8 +1137,8 @@ impl Q38TensorOps for TensorEntry<'_> {
         if !supported_q8_k(self.ty) {
             return Err(Q38CoreError::UnsupportedQuantType(self.ty as u32));
         }
-        let rbytes = row_bytes(self.ty, width)
-            .ok_or(Q38CoreError::UnsupportedQuantType(self.ty as u32))?;
+        let rbytes =
+            row_bytes(self.ty, width).ok_or(Q38CoreError::UnsupportedQuantType(self.ty as u32))?;
         let blocks = width / BLOCK;
         if input.len() < blocks {
             return Err(Q38CoreError::ShapeMismatch {
@@ -1173,8 +1187,8 @@ impl Q38TensorOps for TensorEntry<'_> {
         if !supported_f32_gemv(self.ty) {
             return Err(Q38CoreError::UnsupportedQuantType(self.ty as u32));
         }
-        let rbytes = row_bytes(self.ty, width)
-            .ok_or(Q38CoreError::UnsupportedQuantType(self.ty as u32))?;
+        let rbytes =
+            row_bytes(self.ty, width).ok_or(Q38CoreError::UnsupportedQuantType(self.ty as u32))?;
         if input.len() < batch * width {
             return Err(Q38CoreError::ShapeMismatch {
                 expected: (batch * width) as u64,
@@ -1215,8 +1229,8 @@ impl Q38TensorOps for TensorEntry<'_> {
         if !supported_q8_k(self.ty) {
             return Err(Q38CoreError::UnsupportedQuantType(self.ty as u32));
         }
-        let rbytes = row_bytes(self.ty, width)
-            .ok_or(Q38CoreError::UnsupportedQuantType(self.ty as u32))?;
+        let rbytes =
+            row_bytes(self.ty, width).ok_or(Q38CoreError::UnsupportedQuantType(self.ty as u32))?;
         let blocks = width / BLOCK;
         if input.len() < batch * blocks {
             return Err(Q38CoreError::ShapeMismatch {

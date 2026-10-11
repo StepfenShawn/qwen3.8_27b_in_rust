@@ -221,7 +221,9 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let tokenizer = tokenizer::build_tokenizer_from_gguf(&gguf)?;
     let eos = gguf.meta_u32("tokenizer.ggml.eos_token_id").unwrap_or(0);
 
-    let control_tokens: HashSet<u32> = tokenizer::get_all_control_token_ids(&gguf).into_iter().collect();
+    let control_tokens: HashSet<u32> = tokenizer::get_all_control_token_ids(&gguf)
+        .into_iter()
+        .collect();
     let think_close = tokenizer.token_to_id("</think>");
 
     let mut model =
@@ -273,6 +275,7 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         if generated == 0 {
             first_ready = Some(Instant::now());
         }
+        // the size of `control_tokens` is `27`, we dont need to care about perfermance here!
         if !control_tokens.contains(&token) {
             let text = tokenizer.decode(&[token], false)?;
             print!("{text}");

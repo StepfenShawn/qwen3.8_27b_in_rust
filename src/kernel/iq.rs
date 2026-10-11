@@ -8,7 +8,7 @@ use crate::kernel::iq_tables::{
     KSIGNS_IQ2XS, KVALUES_IQ4NL,
 };
 use crate::kernel::quant::f16_to_f32;
-use crate::kernel::{Q38Q8KBlock, Q38_Q8_K_BLOCK_SIZE, q38_parallel_over};
+use crate::kernel::{Q38_Q8_K_BLOCK_SIZE, Q38Q8KBlock, q38_parallel_over};
 use rayon::prelude::*;
 
 /// Widest kernel iteration unit in elements. `IQ4_NL` super-blocks are the
@@ -130,8 +130,7 @@ fn dequant_block(block: &[u8], out: &mut [f32; MAX_BLOCK], ty: GgmlType) {
                 for lane in 0..16 {
                     let packed = quants[group * 16 + lane];
                     out[group * 32 + lane] = ds * KVALUES_IQ4NL[(packed & 15) as usize] as f32;
-                    out[group * 32 + lane + 16] =
-                        ds * KVALUES_IQ4NL[(packed >> 4) as usize] as f32;
+                    out[group * 32 + lane + 16] = ds * KVALUES_IQ4NL[(packed >> 4) as usize] as f32;
                 }
             }
         }
@@ -145,8 +144,7 @@ fn dequant_block(block: &[u8], out: &mut [f32; MAX_BLOCK], ty: GgmlType) {
                 let code = &indices[group * 8..group * 8 + 8];
                 let high_bits = high[group] as u32;
                 let group_signs = &signs[group * 4..group * 4 + 4];
-                let scale =
-                    1 + 2 * ((scales[group / 2] >> (4 * (group % 2))) & 15) as i32;
+                let scale = 1 + 2 * ((scales[group / 2] >> (4 * (group % 2))) & 15) as i32;
                 let ds = d * scale as f32;
                 for section in 0..4 {
                     let index0 =
@@ -288,7 +286,11 @@ fn dequant_block(block: &[u8], out: &mut [f32; MAX_BLOCK], ty: GgmlType) {
                         | ((group_high as u32) << (8 - 4 * (section % 2))) & 0x700;
                     let grid = grid64(IQ1S_GRID[index as usize]);
                     let delta_bit = if section % 2 == 1 { 0x80 } else { 0x08 };
-                    let delta = if group_high & delta_bit != 0 { -1.0 } else { 1.0 };
+                    let delta = if group_high & delta_bit != 0 {
+                        -1.0
+                    } else {
+                        1.0
+                    };
                     let ds = d * (if section < 2 { scale0 } else { scale1 }) as f32;
                     for lane in 0..8 {
                         out[group * 32 + section * 8 + lane] =
@@ -420,8 +422,7 @@ pub(crate) fn dot_iq3_s_q8_k(data: &[u8], q: &[Q38Q8KBlock], blocks: usize) -> f
             let scale = 1 + 2 * ((scales[group / 2] >> (4 * (group % 2))) & 15) as i32;
             let mut subtotal = 0i32;
             for section in 0..4 {
-                let index0 =
-                    code[section * 2] as u32 | ((high_bits << (8 - 2 * section)) & 0x100);
+                let index0 = code[section * 2] as u32 | ((high_bits << (8 - 2 * section)) & 0x100);
                 let index1 =
                     code[section * 2 + 1] as u32 | ((high_bits << (7 - 2 * section)) & 0x100);
                 let g0 = grid32(IQ3S_GRID[index0 as usize]);
@@ -760,14 +761,10 @@ fn dot_iq1_s_repacked_scalar(weights: &[u8], q: &[Q38Q8KBlock], blocks: usize) -
 ///
 /// `weights` points at the first repacked block of the row; the result is
 /// numerically identical to [`dot_q8_k`] for `GgmlType::Iq1S`.
-pub fn dot_iq1_s_repacked_q8_k(
-    weights: &[u8],
-    q: &[Q38Q8KBlock],
-    blocks: usize,
-) -> f32 {
-    #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
-    if let Some(v) = crate::kernel::simd::iq::try_dot_iq1_s_repacked_q8_k(weights, q, blocks) {
-        return v;
+pub fn dot_iq1_s_repacked_q8_k(weights: &[u8], q: &[Q38Q8KBlock], blocks: usize) -> f32 {
+    #[cfg(target_arch = "x86_64")]
+    if super::avx2_fma() {
+        return crate::kernel::x86::iq::dot_iq1_s_repacked_q8_k(weights, q, blocks);
     }
     dot_iq1_s_repacked_scalar(weights, q, blocks)
 }
@@ -775,25 +772,25 @@ pub fn dot_iq1_s_repacked_q8_k(
 // ---- runtime dispatch ----
 
 fn dot_iq4_xs(data: &[u8], q: &[Q38Q8KBlock], blocks: usize) -> f32 {
-    #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
-    if let Some(v) = crate::kernel::simd::iq::try_dot_iq4_xs_q8_k(data, q, blocks) {
-        return v;
+    #[cfg(target_arch = "x86_64")]
+    if super::avx2_fma() {
+        return crate::kernel::x86::iq::dot_iq4_xs_q8_k(data, q, blocks);
     }
     dot_iq4_xs_q8_k(data, q, blocks)
 }
 
 fn dot_iq4_nl(data: &[u8], q: &[Q38Q8KBlock], blocks: usize) -> f32 {
-    #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
-    if let Some(v) = crate::kernel::simd::iq::try_dot_iq4_nl_q8_k(data, q, blocks) {
-        return v;
+    #[cfg(target_arch = "x86_64")]
+    if super::avx2_fma() {
+        return crate::kernel::x86::iq::dot_iq4_nl_q8_k(data, q, blocks);
     }
     dot_iq4_nl_q8_k(data, q, blocks)
 }
 
 fn dot_iq3_s(data: &[u8], q: &[Q38Q8KBlock], blocks: usize) -> f32 {
-    #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
-    if let Some(v) = crate::kernel::simd::iq::try_dot_iq3_s_q8_k(data, q, blocks) {
-        return v;
+    #[cfg(target_arch = "x86_64")]
+    if super::avx2_fma() {
+        return crate::kernel::x86::iq::dot_iq3_s_q8_k(data, q, blocks);
     }
     dot_iq3_s_q8_k(data, q, blocks)
 }

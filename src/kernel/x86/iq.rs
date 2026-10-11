@@ -2,81 +2,44 @@
 
 //! AVX2 IQ kernels.
 
+use crate::kernel::Q38Q8KBlock;
 use crate::kernel::iq::{
-    f16_at, iq4_nl_group, repack_base_d, repack_grid_index, repack_signed_scale, u16_at, u32_at,
-    IQ1S_REPACK_BLOCK_BYTES, IQ1_DELTA,
+    IQ1_DELTA, IQ1S_REPACK_BLOCK_BYTES, f16_at, iq4_nl_group, repack_base_d, repack_grid_index,
+    repack_signed_scale, u16_at, u32_at,
 };
 use crate::kernel::iq_tables::{IQ1S_GRID, IQ3S_GRID, KVALUES_IQ4NL};
-use crate::kernel::Q38Q8KBlock;
 use std::arch::x86_64::*;
 
 #[inline]
-fn avx2_fma() -> bool {
-    std::arch::is_x86_feature_detected!("avx2") && std::arch::is_x86_feature_detected!("fma")
+pub(crate) fn dot_iq1_s_repacked_q8_k(weights: &[u8], q: &[Q38Q8KBlock], blocks: usize) -> f32 {
+    unsafe { dot_iq1_s_repacked_avx2(weights, q, blocks) }
 }
 
 #[inline]
-pub(crate) fn try_dot_iq1_s_repacked_q8_k(
-    weights: &[u8],
-    q: &[Q38Q8KBlock],
-    blocks: usize,
-) -> Option<f32> {
-    if !avx2_fma() {
-        return None;
-    }
-    Some(unsafe { dot_iq1_s_repacked_avx2(weights, q, blocks) })
+pub(crate) fn dot_iq4_xs_q8_k(data: &[u8], q: &[Q38Q8KBlock], blocks: usize) -> f32 {
+    unsafe { dot_iq4_xs_q8_k_avx2(data, q, blocks) }
 }
 
 #[inline]
-pub(crate) fn try_dot_iq4_xs_q8_k(
-    data: &[u8],
-    q: &[Q38Q8KBlock],
-    blocks: usize,
-) -> Option<f32> {
-    if !avx2_fma() {
-        return None;
-    }
-    Some(unsafe { dot_iq4_xs_q8_k_avx2(data, q, blocks) })
+pub(crate) fn dot_iq4_nl_q8_k(data: &[u8], q: &[Q38Q8KBlock], blocks: usize) -> f32 {
+    unsafe { dot_iq4_nl_q8_k_avx2(data, q, blocks) }
 }
 
 #[inline]
-pub(crate) fn try_dot_iq4_nl_q8_k(
-    data: &[u8],
-    q: &[Q38Q8KBlock],
-    blocks: usize,
-) -> Option<f32> {
-    if !avx2_fma() {
-        return None;
-    }
-    Some(unsafe { dot_iq4_nl_q8_k_avx2(data, q, blocks) })
-}
-
-#[inline]
-pub(crate) fn try_dot_iq3_s_q8_k(
-    data: &[u8],
-    q: &[Q38Q8KBlock],
-    blocks: usize,
-) -> Option<f32> {
-    if !avx2_fma() {
-        return None;
-    }
-    Some(unsafe { dot_iq3_s_q8_k_avx2(data, q, blocks) })
+pub(crate) fn dot_iq3_s_q8_k(data: &[u8], q: &[Q38Q8KBlock], blocks: usize) -> f32 {
+    unsafe { dot_iq3_s_q8_k_avx2(data, q, blocks) }
 }
 
 // ---------------------------------------------------------------------------
 // AVX2 integer kernels
 // ---------------------------------------------------------------------------
-//
-// Mirrors the `#if defined(__AVX2__)` branches of `qwen38_quant.c`. The integer
-// accumulators below are exact: every kernel is a sum of `i8 * i8` products
-// into `i32`, so it agrees with the scalar path bit for bit. Only the final
-// `f32` horizontal reduction reorders the additions, which is why the
-// consistency test compares against the scalar kernel with a tolerance rather
-// than `to_bits()`.
 
 #[target_feature(enable = "avx2,fma")]
 unsafe fn sum_f32x8(values: __m256) -> f32 {
-    let mut sum = _mm_add_ps(_mm256_extractf128_ps(values, 1), _mm256_castps256_ps128(values));
+    let mut sum = _mm_add_ps(
+        _mm256_extractf128_ps(values, 1),
+        _mm256_castps256_ps128(values),
+    );
     sum = _mm_add_ps(sum, _mm_movehl_ps(sum, sum));
     sum = _mm_add_ss(sum, _mm_movehdup_ps(sum));
     _mm_cvtss_f32(sum)
@@ -111,7 +74,7 @@ unsafe fn dot_iq1_s_repacked_avx2(weights: &[u8], q: &[Q38Q8KBlock], blocks: usi
             let activation0 =
                 _mm256_loadu_si256(activation.quants[group * 32..].as_ptr() as *const __m256i);
             let activation1 = _mm256_loadu_si256(
-                activation.quants[(group + 1) * 32..].as_ptr() as *const __m256i,
+                activation.quants[(group + 1) * 32..].as_ptr() as *const __m256i
             );
             let signed0 = repack_signed_scale(weight, group);
             let signed1 = repack_signed_scale(weight, group + 1);
@@ -217,11 +180,7 @@ unsafe fn iq3_s_grid_vectors(codes: &[u8], high: &[u8], output: &mut [__m256i; 2
 }
 
 #[target_feature(enable = "avx2,fma")]
-pub(crate) unsafe fn dot_iq4_xs_q8_k_avx2(
-    data: &[u8],
-    q: &[Q38Q8KBlock],
-    blocks: usize,
-) -> f32 {
+pub(crate) unsafe fn dot_iq4_xs_q8_k_avx2(data: &[u8], q: &[Q38Q8KBlock], blocks: usize) -> f32 {
     let table = _mm_loadu_si128(KVALUES_IQ4NL.as_ptr() as *const __m128i);
     let nibble_mask = _mm_set1_epi8(15);
     let mut accumulated = _mm256_setzero_ps();
@@ -261,11 +220,7 @@ pub(crate) unsafe fn dot_iq4_xs_q8_k_avx2(
 }
 
 #[target_feature(enable = "avx2,fma")]
-pub(crate) unsafe fn dot_iq4_nl_q8_k_avx2(
-    data: &[u8],
-    q: &[Q38Q8KBlock],
-    blocks: usize,
-) -> f32 {
+pub(crate) unsafe fn dot_iq4_nl_q8_k_avx2(data: &[u8], q: &[Q38Q8KBlock], blocks: usize) -> f32 {
     let table = _mm_loadu_si128(KVALUES_IQ4NL.as_ptr() as *const __m128i);
     let nibble_mask = _mm_set1_epi8(15);
     let mut accumulated = _mm256_setzero_ps();
@@ -287,22 +242,14 @@ pub(crate) unsafe fn dot_iq4_nl_q8_k_avx2(
             let activation_group =
                 _mm256_loadu_si256(activation.quants[group * 32..].as_ptr() as *const __m256i);
             let dot = products_s8_s8_32(quant, activation_group);
-            accumulated = _mm256_fmadd_ps(
-                _mm256_set1_ps(d),
-                _mm256_cvtepi32_ps(dot),
-                accumulated,
-            );
+            accumulated = _mm256_fmadd_ps(_mm256_set1_ps(d), _mm256_cvtepi32_ps(dot), accumulated);
         }
     }
     sum_f32x8(accumulated)
 }
 
 #[target_feature(enable = "avx2,fma")]
-pub(crate) unsafe fn dot_iq3_s_q8_k_avx2(
-    data: &[u8],
-    q: &[Q38Q8KBlock],
-    blocks: usize,
-) -> f32 {
+pub(crate) unsafe fn dot_iq3_s_q8_k_avx2(data: &[u8], q: &[Q38Q8KBlock], blocks: usize) -> f32 {
     let mut accumulated = _mm256_setzero_ps();
     for block in 0..blocks {
         let weights = &data[block * 110..(block + 1) * 110];
@@ -353,9 +300,9 @@ unsafe fn products_u8_s8_32(unsigned_values: __m256i, signed_values: __m256i) ->
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::kernel::Q38_Q8_K_BLOCK_SIZE;
     use crate::kernel::iq::{dot_iq3_s_q8_k, dot_iq4_nl_q8_k, dot_iq4_xs_q8_k};
     use crate::kernel::quant::quantize_q8_k;
-    use crate::kernel::Q38_Q8_K_BLOCK_SIZE;
 
     struct Rng(u32);
 
@@ -375,7 +322,7 @@ mod tests {
     }
 
     fn avx2_available() -> bool {
-        avx2_fma()
+        crate::kernel::avx2_fma()
     }
 
     fn synthetic_blocks(blocks: usize, block_bytes: usize, seed: u32) -> Vec<u8> {

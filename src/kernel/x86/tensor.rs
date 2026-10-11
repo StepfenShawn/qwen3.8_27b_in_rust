@@ -2,97 +2,52 @@
 
 //! AVX2 tensor kernels.
 
+use crate::kernel::Q38Q8KBlock;
 use crate::kernel::quant::f16_to_f32;
 use crate::kernel::tensor::{read_f32, read_u16, scale_min_k4, unpack_q3_scales};
-use crate::kernel::Q38Q8KBlock;
 use std::arch::x86_64::*;
 
 #[inline]
-fn avx2_fma() -> bool {
-    std::arch::is_x86_feature_detected!("avx2") && std::arch::is_x86_feature_detected!("fma")
+pub(crate) fn dot_f32(data: &[u8], input: &[f32], n: usize) -> f32 {
+    unsafe { dot_f32_avx2(data, input, n) }
 }
 
 #[inline]
-fn avx2_fma_f16c() -> bool {
-    avx2_fma() && std::arch::is_x86_feature_detected!("f16c")
+pub(crate) fn dot_f16(data: &[u8], input: &[f32], n: usize) -> f32 {
+    unsafe { dot_f16_avx2(data, input, n) }
 }
 
 #[inline]
-pub(crate) fn try_dot_f32(data: &[u8], input: &[f32], n: usize) -> Option<f32> {
-    if !avx2_fma() {
-        return None;
-    }
-    Some(unsafe { dot_f32_avx2(data, input, n) })
+pub(crate) fn dot_q8_0(data: &[u8], input: &[f32], n: usize) -> f32 {
+    unsafe { dot_q8_0_avx2(data, input, n) }
 }
 
 #[inline]
-pub(crate) fn try_dot_f16(data: &[u8], input: &[f32], n: usize) -> Option<f32> {
-    if !avx2_fma_f16c() {
-        return None;
-    }
-    Some(unsafe { dot_f16_avx2(data, input, n) })
+pub(crate) fn dot_q3_k_q8_k(data: &[u8], q: &[Q38Q8KBlock], blocks: usize) -> f32 {
+    unsafe { dot_q3_k_q8_k_avx2(data, q, blocks) }
 }
 
 #[inline]
-pub(crate) fn try_dot_q8_0(data: &[u8], input: &[f32], n: usize) -> Option<f32> {
-    // Q8_0 blocks are 32 values wide; anything else stays on the scalar path.
-    if n % 32 != 0 || !avx2_fma_f16c() {
-        return None;
-    }
-    Some(unsafe { dot_q8_0_avx2(data, input, n) })
+pub(crate) fn dot_q4_k_q8_k(data: &[u8], q: &[Q38Q8KBlock], blocks: usize) -> f32 {
+    unsafe { dot_q4_k_q8_k_avx2(data, q, blocks) }
 }
 
 #[inline]
-pub(crate) fn try_dot_q3_k_q8_k(
-    data: &[u8],
-    q: &[Q38Q8KBlock],
-    blocks: usize,
-) -> Option<f32> {
-    if !avx2_fma() {
-        return None;
-    }
-    Some(unsafe { dot_q3_k_q8_k_avx2(data, q, blocks) })
+pub(crate) fn dot_q5_k_q8_k(data: &[u8], q: &[Q38Q8KBlock], blocks: usize) -> f32 {
+    unsafe { dot_q5_k_q8_k_avx2(data, q, blocks) }
 }
 
 #[inline]
-pub(crate) fn try_dot_q4_k_q8_k(
-    data: &[u8],
-    q: &[Q38Q8KBlock],
-    blocks: usize,
-) -> Option<f32> {
-    if !avx2_fma() {
-        return None;
-    }
-    Some(unsafe { dot_q4_k_q8_k_avx2(data, q, blocks) })
-}
-
-#[inline]
-pub(crate) fn try_dot_q5_k_q8_k(
-    data: &[u8],
-    q: &[Q38Q8KBlock],
-    blocks: usize,
-) -> Option<f32> {
-    if !avx2_fma() {
-        return None;
-    }
-    Some(unsafe { dot_q5_k_q8_k_avx2(data, q, blocks) })
-}
-
-#[inline]
-pub(crate) fn try_dot_q6_k_q8_k(
-    data: &[u8],
-    q: &[Q38Q8KBlock],
-    blocks: usize,
-) -> Option<f32> {
-    if !avx2_fma() {
-        return None;
-    }
-    Some(unsafe { dot_q6_k_q8_k_avx2(data, q, blocks) })
+pub(crate) fn dot_q6_k_q8_k(data: &[u8], q: &[Q38Q8KBlock], blocks: usize) -> f32 {
+    unsafe { dot_q6_k_q8_k_avx2(data, q, blocks) }
 }
 
 #[target_feature(enable = "avx2,fma")]
 unsafe fn sum_f32_8(values: __m256) -> f32 {
-    let mut sum = _mm_add_ps(_mm256_extractf128_ps(values, 1), _mm256_castps256_ps128(values));
+    let mut sum = _mm_add_ps(
+        _mm256_extractf128_ps(values, 1),
+        _mm256_castps256_ps128(values),
+    );
     sum = _mm_add_ps(sum, _mm_movehl_ps(sum, sum));
     sum = _mm_add_ss(sum, _mm_movehdup_ps(sum));
     _mm_cvtss_f32(sum)
@@ -202,7 +157,10 @@ unsafe fn dot_q4_k_q8_k_avx2(data: &[u8], q: &[Q38Q8KBlock], blocks: usize) -> f
             accumulated_min,
         );
     }
-    let mut minimum = _mm_add_ps(accumulated_min, _mm_movehl_ps(accumulated_min, accumulated_min));
+    let mut minimum = _mm_add_ps(
+        accumulated_min,
+        _mm_movehl_ps(accumulated_min, accumulated_min),
+    );
     minimum = _mm_add_ss(minimum, _mm_movehdup_ps(minimum));
     sum_f32_8(accumulated) + _mm_cvtss_f32(minimum)
 }
@@ -221,12 +179,12 @@ unsafe fn dot_q6_k_q8_k_avx2(data: &[u8], q: &[Q38Q8KBlock], blocks: usize) -> f
         let offset_products = _mm256_slli_epi32(_mm256_madd_epi16(input_sums, wide_scales), 5);
         let mut weighted_lanes = _mm256_setzero_si256();
         for half in 0..2 {
-            let low0 = _mm256_loadu_si256(data[block * 210 + half * 64..].as_ptr() as *const __m256i);
-            let low1 = _mm256_loadu_si256(
-                data[block * 210 + half * 64 + 32..].as_ptr() as *const __m256i,
-            );
+            let low0 =
+                _mm256_loadu_si256(data[block * 210 + half * 64..].as_ptr() as *const __m256i);
+            let low1 =
+                _mm256_loadu_si256(data[block * 210 + half * 64 + 32..].as_ptr() as *const __m256i);
             let upper = _mm256_loadu_si256(
-                data[block * 210 + 128 + half * 32..].as_ptr() as *const __m256i,
+                data[block * 210 + 128 + half * 32..].as_ptr() as *const __m256i
             );
             let q0 = _mm256_or_si256(
                 _mm256_and_si256(low0, mask4),
@@ -250,22 +208,13 @@ unsafe fn dot_q6_k_q8_k_avx2(data: &[u8], q: &[Q38Q8KBlock], blocks: usize) -> f
             let mut product1 = _mm256_maddubs_epi16(q1, load_quants(b, base + 32));
             let mut product2 = _mm256_maddubs_epi16(q2, load_quants(b, base + 64));
             let mut product3 = _mm256_maddubs_epi16(q3, load_quants(b, base + 96));
-            product0 = _mm256_madd_epi16(
-                q6_scale_pair(&data[block * 210 + 192..], si),
-                product0,
-            );
-            product1 = _mm256_madd_epi16(
-                q6_scale_pair(&data[block * 210 + 192..], si + 2),
-                product1,
-            );
-            product2 = _mm256_madd_epi16(
-                q6_scale_pair(&data[block * 210 + 192..], si + 4),
-                product2,
-            );
-            product3 = _mm256_madd_epi16(
-                q6_scale_pair(&data[block * 210 + 192..], si + 6),
-                product3,
-            );
+            product0 = _mm256_madd_epi16(q6_scale_pair(&data[block * 210 + 192..], si), product0);
+            product1 =
+                _mm256_madd_epi16(q6_scale_pair(&data[block * 210 + 192..], si + 2), product1);
+            product2 =
+                _mm256_madd_epi16(q6_scale_pair(&data[block * 210 + 192..], si + 4), product2);
+            product3 =
+                _mm256_madd_epi16(q6_scale_pair(&data[block * 210 + 192..], si + 6), product3);
             weighted_lanes = _mm256_add_epi32(weighted_lanes, _mm256_add_epi32(product0, product1));
             weighted_lanes = _mm256_add_epi32(weighted_lanes, _mm256_add_epi32(product2, product3));
         }
@@ -301,11 +250,7 @@ unsafe fn q3_field_shift(packed: __m256i, field: usize) -> __m256i {
 }
 
 #[target_feature(enable = "avx2,fma")]
-pub(crate) unsafe fn dot_q3_k_q8_k_avx2(
-    data: &[u8],
-    q: &[Q38Q8KBlock],
-    blocks: usize,
-) -> f32 {
+pub(crate) unsafe fn dot_q3_k_q8_k_avx2(data: &[u8], q: &[Q38Q8KBlock], blocks: usize) -> f32 {
     let mut accumulated = _mm256_setzero_ps();
     for block in 0..blocks {
         let b = &q[block];
@@ -332,7 +277,7 @@ pub(crate) unsafe fn dot_q3_k_q8_k_avx2(
                 );
                 let quant = _mm256_sub_epi8(low_values, _mm256_and_si256(absent, four));
                 let activation = _mm256_loadu_si256(
-                    b.quants[half * 128 + field * 32..].as_ptr() as *const __m256i,
+                    b.quants[half * 128 + field * 32..].as_ptr() as *const __m256i
                 );
                 let dot = products_s8_s8_32(quant, activation);
                 // Lanes 0..15 use the first scale, 16..31 the second.
@@ -354,11 +299,7 @@ pub(crate) unsafe fn dot_q3_k_q8_k_avx2(
 }
 
 #[target_feature(enable = "avx2,fma")]
-pub(crate) unsafe fn dot_q5_k_q8_k_avx2(
-    data: &[u8],
-    q: &[Q38Q8KBlock],
-    blocks: usize,
-) -> f32 {
+pub(crate) unsafe fn dot_q5_k_q8_k_avx2(data: &[u8], q: &[Q38Q8KBlock], blocks: usize) -> f32 {
     let mut accumulated = _mm256_setzero_ps();
     let mut accumulated_min = _mm_setzero_ps();
     for block in 0..blocks {
@@ -414,8 +355,11 @@ pub(crate) unsafe fn dot_q5_k_q8_k_avx2(
             _mm256_cvtepi32_ps(weighted_lanes),
             accumulated,
         );
-        accumulated_min =
-            _mm_fmadd_ss(_mm_set_ss(-dmin), _mm_set_ss(minimum as f32), accumulated_min);
+        accumulated_min = _mm_fmadd_ss(
+            _mm_set_ss(-dmin),
+            _mm_set_ss(minimum as f32),
+            accumulated_min,
+        );
     }
     sum_f32_8(accumulated) + _mm_cvtss_f32(accumulated_min)
 }
@@ -450,11 +394,11 @@ pub(crate) unsafe fn dot_q8_0_avx2(data: &[u8], input: &[f32], n: usize) -> f32 
 mod tests {
     use super::*;
     use crate::gguf::{GgmlType, Gguf};
+    use crate::kernel::Q38_Q8_K_BLOCK_SIZE;
     use crate::kernel::quant::quantize_q8_k;
     use crate::kernel::tensor::{
         dot_q3_k_q8_k_scalar, dot_q5_k_q8_k_scalar, dot_q8_0_scalar, row_bytes,
     };
-    use crate::kernel::Q38_Q8_K_BLOCK_SIZE;
 
     const BLOCK: usize = Q38_Q8_K_BLOCK_SIZE;
 
@@ -469,7 +413,7 @@ mod tests {
     }
 
     fn avx2_available() -> bool {
-        avx2_fma()
+        crate::kernel::avx2_fma()
     }
 
     #[test]
@@ -522,7 +466,10 @@ mod tests {
                 };
                 let rel = relative(vector, scalar);
                 println!("{key} row={row}: scalar={scalar} avx2={vector} rel={rel:.3e}");
-                assert!(rel < 1e-5, "{key} row {row}: avx2 {vector} vs scalar {scalar}");
+                assert!(
+                    rel < 1e-5,
+                    "{key} row {row}: avx2 {vector} vs scalar {scalar}"
+                );
                 checked += 1;
             }
         }
@@ -553,7 +500,10 @@ mod tests {
             let vector = unsafe { dot_q8_0_avx2(data, &x, width) };
             let rel = relative(vector, scalar);
             println!("Q8_0 row={row}: scalar={scalar} avx2={vector} rel={rel:.3e}");
-            assert!(rel < 1e-5, "Q8_0 row {row}: avx2 {vector} vs scalar {scalar}");
+            assert!(
+                rel < 1e-5,
+                "Q8_0 row {row}: avx2 {vector} vs scalar {scalar}"
+            );
             checked += 1;
         }
         assert_eq!(checked, 2);

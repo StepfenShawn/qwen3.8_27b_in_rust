@@ -1,6 +1,5 @@
 use crate::kernel::{
-    Q38CoreError, Q38CoreResult, Q38Q8KBlock, Q38QuantOps, Q38_Q8_K_BLOCK_SIZE,
-    q38_parallel_over,
+    Q38_Q8_K_BLOCK_SIZE, Q38CoreError, Q38CoreResult, Q38Q8KBlock, Q38QuantOps, q38_parallel_over,
 };
 use rayon::prelude::*;
 

@@ -126,12 +126,19 @@ pub mod ops;
 pub mod quant;
 pub mod tensor;
 
-#[cfg(target_arch = "x86_64")]
-pub mod x86;
 #[cfg(target_arch = "aarch64")]
 pub mod neon;
+#[cfg(target_arch = "x86_64")]
+pub mod x86;
 
 #[cfg(target_arch = "x86_64")]
-pub(crate) use x86 as simd;
-#[cfg(target_arch = "aarch64")]
-pub(crate) use neon as simd;
+#[inline]
+pub fn avx2_fma() -> bool {
+    std::arch::is_x86_feature_detected!("avx2") && std::arch::is_x86_feature_detected!("fma")
+}
+
+#[cfg(target_arch = "x86_64")]
+#[inline]
+pub fn avx2_fma_f16c() -> bool {
+    avx2_fma() && std::arch::is_x86_feature_detected!("f16c")
+}

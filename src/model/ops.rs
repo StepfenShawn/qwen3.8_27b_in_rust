@@ -21,13 +21,13 @@
 
 use crate::gguf::{GgmlType, Gguf, TensorEntry};
 use crate::kernel::quant::quantize_q8_k;
-use crate::kernel::{Q38Q8KBlock, Q38TensorOps, Q38_Q8_K_BLOCK_SIZE, q38_parallel_over};
+use crate::kernel::{Q38_Q8_K_BLOCK_SIZE, Q38Q8KBlock, Q38TensorOps, q38_parallel_over};
 use crate::model::{
-    Q38Attention, Q38BatchScratch, Q38Layer, Q38MTPWeights, Q38Model, Q38ModelOps, Q38Scratch,
-    Q38_ATTN_HEADS, Q38_ATTN_HEAD_DIM, Q38_ATTN_KV_DIM, Q38_ATTN_KV_HEADS, Q38_ATTN_QG_DIM,
-    Q38_ATTN_Q_DIM, Q38_FFN, Q38_HIDDEN, Q38_LAYERS, Q38_LINEAR_HEAD_DIM, Q38_LINEAR_QK_DIM,
+    Q38_ATTN_HEAD_DIM, Q38_ATTN_HEADS, Q38_ATTN_KV_DIM, Q38_ATTN_KV_HEADS, Q38_ATTN_Q_DIM,
+    Q38_ATTN_QG_DIM, Q38_FFN, Q38_HIDDEN, Q38_LAYERS, Q38_LINEAR_HEAD_DIM, Q38_LINEAR_QK_DIM,
     Q38_LINEAR_QK_HEADS, Q38_LINEAR_QKV_DIM, Q38_LINEAR_V_DIM, Q38_LINEAR_V_HEADS,
     Q38_RECURRENT_LAYERS, Q38_RMS_EPS, Q38_TOTAL_FULL_LAYERS, Q38_TOTAL_LAYERS, Q38_VOCAB,
+    Q38Attention, Q38BatchScratch, Q38Layer, Q38MTPWeights, Q38Model, Q38ModelOps, Q38Scratch,
 };
 use rayon::prelude::*;
 
@@ -289,7 +289,13 @@ fn validate_layer(weights: &Q38Layer<'_>, layer: usize) -> Result<(), i32> {
                 Q38_LINEAR_V_HEADS as u64,
                 false,
             )?;
-            expect_tensor(conv, &name("ssm_conv1d.weight"), 4, Q38_LINEAR_QKV_DIM as u64, true)?;
+            expect_tensor(
+                conv,
+                &name("ssm_conv1d.weight"),
+                4,
+                Q38_LINEAR_QKV_DIM as u64,
+                true,
+            )?;
             expect_tensor(dt, &name("ssm_dt.bias"), Q38_LINEAR_V_HEADS as u64, 0, true)?;
             expect_tensor(a, &name("ssm_a"), Q38_LINEAR_V_HEADS as u64, 0, true)?;
             expect_tensor(
@@ -337,7 +343,11 @@ fn validate_base_contract(
         && meta_u32_is(gguf, "qwen35.embedding_length", Q38_HIDDEN as u32)
         && meta_u32_is(gguf, "qwen35.feed_forward_length", Q38_FFN as u32)
         && meta_u32_is(gguf, "qwen35.attention.head_count", Q38_ATTN_HEADS as u32)
-        && meta_u32_is(gguf, "qwen35.attention.head_count_kv", Q38_ATTN_KV_HEADS as u32)
+        && meta_u32_is(
+            gguf,
+            "qwen35.attention.head_count_kv",
+            Q38_ATTN_KV_HEADS as u32,
+        )
         && meta_u32_is(gguf, "qwen35.full_attention_interval", 4)
         && meta_u32_is(gguf, "qwen35.ssm.state_size", Q38_LINEAR_HEAD_DIM as u32)
         && meta_u32_is(gguf, "qwen35.ssm.group_count", Q38_LINEAR_QK_HEADS as u32)
@@ -645,7 +655,10 @@ fn linear_core(
     alpha: &mut [f32],
     attention: &mut [f32],
 ) -> Result<(), i32> {
-    let Q38Attention::Linear { conv, dt, a, norm, .. } = &weights.attention else {
+    let Q38Attention::Linear {
+        conv, dt, a, norm, ..
+    } = &weights.attention
+    else {
         return Err(-1);
     };
 
@@ -720,8 +733,7 @@ fn linear_core(
     }
 
     for value_head in 0..Q38_LINEAR_V_HEADS {
-        let head_output =
-            &mut attention[value_head * Q38_LINEAR_HEAD_DIM..][..Q38_LINEAR_HEAD_DIM];
+        let head_output = &mut attention[value_head * Q38_LINEAR_HEAD_DIM..][..Q38_LINEAR_HEAD_DIM];
         rmsnorm_inplace(head_output, norm, Q38_LINEAR_HEAD_DIM);
         let gate = &z[value_head * Q38_LINEAR_HEAD_DIM..][..Q38_LINEAR_HEAD_DIM];
         silu_multiply(head_output, gate, Q38_LINEAR_HEAD_DIM);
@@ -755,13 +767,7 @@ fn linear_attention(
         Q38_HIDDEN,
         qkv,
     )?;
-    project(
-        &mut scratch.wide1,
-        input,
-        &scratch.quantized,
-        Q38_HIDDEN,
-        z,
-    )?;
+    project(&mut scratch.wide1, input, &scratch.quantized, Q38_HIDDEN, z)?;
     project(
         &mut scratch.beta,
         input,
@@ -843,18 +849,21 @@ fn full_core(
         );
     }
     rope(&mut q[..Q38_ATTN_Q_DIM], Q38_ATTN_HEADS, current_position);
-    rope(&mut key[..Q38_ATTN_KV_DIM], Q38_ATTN_KV_HEADS, current_position);
+    rope(
+        &mut key[..Q38_ATTN_KV_DIM],
+        Q38_ATTN_KV_HEADS,
+        current_position,
+    );
 
     let full_index = layer / 4;
     let cache_row = (full_index * context_length + current_position as usize) * Q38_ATTN_KV_DIM;
-    if cache_row + Q38_ATTN_KV_DIM > key_cache.len() || cache_row + Q38_ATTN_KV_DIM > value_cache.len()
+    if cache_row + Q38_ATTN_KV_DIM > key_cache.len()
+        || cache_row + Q38_ATTN_KV_DIM > value_cache.len()
     {
         return Err(-1);
     }
-    key_cache[cache_row..cache_row + Q38_ATTN_KV_DIM]
-        .copy_from_slice(&key[..Q38_ATTN_KV_DIM]);
-    value_cache[cache_row..cache_row + Q38_ATTN_KV_DIM]
-        .copy_from_slice(&value[..Q38_ATTN_KV_DIM]);
+    key_cache[cache_row..cache_row + Q38_ATTN_KV_DIM].copy_from_slice(&key[..Q38_ATTN_KV_DIM]);
+    value_cache[cache_row..cache_row + Q38_ATTN_KV_DIM].copy_from_slice(&value[..Q38_ATTN_KV_DIM]);
 
     let groups = Q38_ATTN_HEADS / Q38_ATTN_KV_HEADS;
     let score_scale = 1.0 / (Q38_ATTN_HEAD_DIM as f32).sqrt();
@@ -1081,8 +1090,7 @@ fn batch_linear_attention(
             &model.layers[layer],
             &mut model.conv_state[conv_base..conv_base + Q38_LINEAR_QKV_DIM * 3],
             &mut model.delta_state[delta_base..delta_base + delta_len],
-            &mut batch.wide0[token * Q38_LINEAR_QKV_DIM..]
-                [..Q38_LINEAR_QKV_DIM],
+            &mut batch.wide0[token * Q38_LINEAR_QKV_DIM..][..Q38_LINEAR_QKV_DIM],
             &batch.wide1[token * Q38_LINEAR_V_DIM..][..Q38_LINEAR_V_DIM],
             &mut batch.beta[token * Q38_LINEAR_V_HEADS..][..Q38_LINEAR_V_HEADS],
             &mut batch.alpha[token * Q38_LINEAR_V_HEADS..][..Q38_LINEAR_V_HEADS],
@@ -1320,7 +1328,9 @@ fn mtp_catchup(
             return Err(-1);
         }
         let hidden = &mut batch.hidden[token * Q38_HIDDEN..(token + 1) * Q38_HIDDEN];
-        embedding.tensor_row_f32(hidden, id as u64).map_err(|_| -1)?;
+        embedding
+            .tensor_row_f32(hidden, id as u64)
+            .map_err(|_| -1)?;
         let input = &mut batch.wide0[token * 2 * Q38_HIDDEN..][..2 * Q38_HIDDEN];
         rmsnorm(&mut input[..Q38_HIDDEN], hidden, enorm, Q38_HIDDEN);
         let previous = if token == 0 {
@@ -1418,7 +1428,9 @@ fn alloc_scratch(context_length: u32) -> Q38Scratch {
         beta: vec![0.0f32; Q38_LINEAR_V_HEADS],
         alpha: vec![0.0f32; Q38_LINEAR_V_HEADS],
         logits: vec![0.0f32; Q38_VOCAB],
-        quantized: (0..Q38_FFN / BLOCK).map(|_| Q38Q8KBlock::default()).collect(),
+        quantized: (0..Q38_FFN / BLOCK)
+            .map(|_| Q38Q8KBlock::default())
+            .collect(),
     }
 }
 
@@ -1561,8 +1573,7 @@ impl<'a> Q38Model<'a> {
         } else {
             let index = recurrent_index(layer);
             let conv_base = index * Q38_LINEAR_QKV_DIM * 3;
-            let delta_base =
-                index * Q38_LINEAR_V_HEADS * Q38_LINEAR_HEAD_DIM * Q38_LINEAR_HEAD_DIM;
+            let delta_base = index * Q38_LINEAR_V_HEADS * Q38_LINEAR_HEAD_DIM * Q38_LINEAR_HEAD_DIM;
             let delta_len = Q38_LINEAR_V_HEADS * Q38_LINEAR_HEAD_DIM * Q38_LINEAR_HEAD_DIM;
             linear_attention(
                 &self.layers[layer],
@@ -1630,7 +1641,8 @@ impl<'a> Q38Model<'a> {
 
     fn restore_target_state(&mut self) {
         self.conv_state.copy_from_slice(&self.checkpoint_conv_state);
-        self.delta_state.copy_from_slice(&self.checkpoint_delta_state);
+        self.delta_state
+            .copy_from_slice(&self.checkpoint_delta_state);
         self.position = self.checkpoint_position;
     }
 
@@ -1990,7 +2002,10 @@ fn batch_target_eval(
         }
         let embedding = model.embedding;
         embedding
-            .tensor_row_f32(&mut batch.hidden[token * Q38_HIDDEN..][..Q38_HIDDEN], id as u64)
+            .tensor_row_f32(
+                &mut batch.hidden[token * Q38_HIDDEN..][..Q38_HIDDEN],
+                id as u64,
+            )
             .map_err(|_| -1)?;
     }
     let base_position = model.position;
@@ -2095,11 +2110,7 @@ mod tests {
         let mut model = Q38Model::open_gguf(&gguf, 256).unwrap();
         for (label, prompt) in prompts {
             model.reset();
-            let ids: Vec<u32> = tokenizer
-                .encode(prompt, false)
-                .unwrap()
-                .get_ids()
-                .to_vec();
+            let ids: Vec<u32> = tokenizer.encode(prompt, false).unwrap().get_ids().to_vec();
             let logits = model.prefill(&ids).unwrap().to_vec();
 
             let finite = logits.iter().filter(|value| value.is_finite()).count();

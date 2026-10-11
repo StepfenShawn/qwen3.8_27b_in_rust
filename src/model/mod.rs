@@ -1,6 +1,6 @@
 use crate::{
     gguf::{Gguf, TensorEntry},
-    kernel::{Q38Q8KBlock, Q38_Q8_K_BLOCK_SIZE},
+    kernel::{Q38_Q8_K_BLOCK_SIZE, Q38Q8KBlock},
 };
 
 pub const Q38_HIDDEN: usize = 5120;
